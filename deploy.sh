@@ -1,4 +1,4 @@
-cp cpu_power_saver.sh /usr/local/bin/
+cp scripts/cpu_power_saver.sh /usr/local/bin/
 chmod +x /usr/local/bin/cpu_power_saver.sh
 
 SERVICE_FILE="/etc/systemd/system/cpu_power_saver.service"
