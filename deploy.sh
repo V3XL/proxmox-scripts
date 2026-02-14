@@ -18,7 +18,7 @@ SAFE_INSTALLED=0
 # Prepare whiptail options
 OPTIONS=(
     "CPU Power Saver" "" $CPU_INSTALLED
-    "Safe Reboot --post (service only runs POST mode)" "" $SAFE_INSTALLED
+    "Safe Reboot --post (runs only after reboot)" "" $SAFE_INSTALLED
 )
 
 # Launch TUI
@@ -32,7 +32,9 @@ SELECTION=$(whiptail --title "Select services to install" \
 # Convert selection to array
 SELECTION=($SELECTION)
 
+# ------------------------------
 # Functions
+# ------------------------------
 install_cpu() {
     cp scripts/cpu_power_saver.sh "$CPU_SCRIPT"
     chmod +x "$CPU_SCRIPT"
@@ -63,7 +65,7 @@ install_safe_reboot() {
     cp scripts/safe_reboot.sh "$SAFE_REBOOT_SCRIPT"
     chmod +x "$SAFE_REBOOT_SCRIPT"
 
-    # Service only runs POST-reboot tasks
+    # POST service: only ever runs --post after reboot
     cat > "$SAFE_REBOOT_SERVICE" <<EOF
 [Unit]
 Description=Safe Reboot Post-Reboot Service
@@ -82,23 +84,17 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable --now safe_reboot.service
-    echo "Safe Reboot --post service installed and enabled."
+    systemctl enable safe_reboot.service   # Do NOT start now
+    echo "Safe Reboot --post service installed and enabled (runs after reboot)."
 
-    # CLI wrapper for manual PRE/POST execution
+    # CLI wrapper: redirect any user call to --pre in background
     cat > "$SAFE_REBOOT_CLI" <<'EOF'
 #!/bin/bash
-# Require explicit argument to run
-if [[ "$#" -ne 1 ]]; then
-    echo "Usage: safe-reboot --pre|--post"
-    exit 1
-fi
-
-ARG="$1"
-exec /usr/local/bin/safe_reboot.sh "$ARG"
+# Automatically run PRE in the background when user runs "safe-reboot"
+exec /usr/local/bin/safe_reboot.sh --pre &
 EOF
     chmod +x "$SAFE_REBOOT_CLI"
-    echo "CLI wrapper 'safe-reboot' created. Use it manually for pre/post-reboot tasks."
+    echo "CLI wrapper 'safe-reboot' created. Running it triggers PRE tasks and auto-reboot."
 }
 
 remove_cpu() {
@@ -115,21 +111,23 @@ remove_safe_reboot() {
     echo "Safe Reboot removed."
 }
 
+# ------------------------------
 # Apply selections
-for name in "CPU Power Saver" "Safe Reboot --post (service only runs POST mode)"; do
+# ------------------------------
+for name in "CPU Power Saver" "Safe Reboot --post (runs only after reboot)"; do
     if [[ " ${SELECTION[*]} " == *"$name"* ]]; then
         case "$name" in
             "CPU Power Saver") [[ $CPU_INSTALLED -eq 0 ]] && install_cpu ;;
-            "Safe Reboot --post (service only runs POST mode)") [[ $SAFE_INSTALLED -eq 0 ]] && install_safe_reboot ;;
+            "Safe Reboot --post (runs only after reboot)") [[ $SAFE_INSTALLED -eq 0 ]] && install_safe_reboot ;;
         esac
     else
         case "$name" in
             "CPU Power Saver") [[ $CPU_INSTALLED -eq 1 ]] && remove_cpu ;;
-            "Safe Reboot --post (service only runs POST mode)") [[ $SAFE_INSTALLED -eq 1 ]] && remove_safe_reboot ;;
+            "Safe Reboot --post (runs only after reboot)") [[ $SAFE_INSTALLED -eq 1 ]] && remove_safe_reboot ;;
         esac
     fi
 done
 
 echo "Deployment complete."
-echo "Use 'safe-reboot --pre' manually to perform pre-reboot tasks and auto-reboot the node."
-echo "The POST-reboot service will automatically run after the node comes back online."
+echo "Run 'safe-reboot' manually to execute PRE tasks and auto-reboot."
+echo "The POST service will automatically run after reboot."
