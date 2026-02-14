@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Paths
 CPU_SCRIPT="/usr/local/bin/cpu_power_saver.sh"
@@ -8,39 +9,36 @@ SAFE_REBOOT_CLI="/usr/local/bin/safe-reboot"
 CPU_SERVICE="/etc/systemd/system/cpu_power_saver.service"
 SAFE_REBOOT_SERVICE="/etc/systemd/system/safe_reboot.service"
 
-# Available options
-OPTIONS=("CPU Power Saver" "Safe Reboot --post")
+# Check installed
+CPU_INSTALLED=0
+SAFE_INSTALLED=0
+[[ -f "$CPU_SERVICE" ]] && CPU_INSTALLED=1
+[[ -f "$SAFE_REBOOT_SERVICE" ]] && SAFE_INSTALLED=1
 
-# Detect installed services
-INSTALLED=()
-[[ -f "$CPU_SERVICE" ]] && INSTALLED+=("CPU Power Saver")
-[[ -f "$SAFE_REBOOT_SERVICE" ]] && INSTALLED+=("Safe Reboot --post")
+# Prepare whiptail options
+OPTIONS=(
+    "CPU Power Saver" "" $CPU_INSTALLED
+    "Safe Reboot --post (service only runs POST mode)" "" $SAFE_INSTALLED
+)
 
-echo "Select services to install (currently installed: ${INSTALLED[*]}):"
-echo "Enter numbers separated by spaces (e.g., 1 2), or leave blank to keep current:"
+# Launch TUI
+SELECTION=$(whiptail --title "Select services to install" \
+    --checklist "Use SPACE to toggle, ENTER to confirm" 15 70 5 \
+    "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
 
-# Show numbered list
-for i in "${!OPTIONS[@]}"; do
-    num=$((i+1))
-    name="${OPTIONS[i]}"
-    if [[ " ${INSTALLED[*]} " == *"$name"* ]]; then
-        echo "$num) [x] $name"
-    else
-        echo "$num) [ ] $name"
-    fi
-done
+# Exit if canceled
+[[ $? -ne 0 ]] && echo "Canceled." && exit 1
 
-read -rp "Selection: " selection
-
-# Parse selection into array of numbers
-read -ra SELECTED <<< "$selection"
+# Convert selection to array
+SELECTION=($SELECTION)
 
 # Functions
 install_cpu() {
     cp scripts/cpu_power_saver.sh "$CPU_SCRIPT"
     chmod +x "$CPU_SCRIPT"
 
-    echo "[Unit]
+    cat > "$CPU_SERVICE" <<EOF
+[Unit]
 Description=CPU Power Saver Service
 After=network.target
 
@@ -53,7 +51,8 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 Environment=HOME=/root
 
 [Install]
-WantedBy=multi-user.target" > "$CPU_SERVICE"
+WantedBy=multi-user.target
+EOF
 
     systemctl daemon-reload
     systemctl enable --now cpu_power_saver.service
@@ -64,7 +63,9 @@ install_safe_reboot() {
     cp scripts/safe_reboot.sh "$SAFE_REBOOT_SCRIPT"
     chmod +x "$SAFE_REBOOT_SCRIPT"
 
-    echo "[Unit]
+    # Service only runs POST-reboot tasks
+    cat > "$SAFE_REBOOT_SERVICE" <<EOF
+[Unit]
 Description=Safe Reboot Post-Reboot Service
 After=network.target
 
@@ -77,18 +78,22 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 Environment=HOME=/root
 
 [Install]
-WantedBy=multi-user.target" > "$SAFE_REBOOT_SERVICE"
+WantedBy=multi-user.target
+EOF
 
     systemctl daemon-reload
     systemctl enable --now safe_reboot.service
     echo "Safe Reboot --post service installed and enabled."
 
-    # CLI wrapper
-    echo "#!/bin/bash
-ARG=\"\${1:---pre}\"
-$SAFE_REBOOT_SCRIPT \"\$ARG\"" > "$SAFE_REBOOT_CLI"
+    # CLI wrapper for manual PRE/POST execution
+    cat > "$SAFE_REBOOT_CLI" <<'EOF'
+#!/bin/bash
+# Always default to PRE mode if no argument given
+ARG="${1:---pre}"
+exec /usr/local/bin/safe_reboot.sh "$ARG"
+EOF
     chmod +x "$SAFE_REBOOT_CLI"
-    echo "CLI wrapper 'safe-reboot' created."
+    echo "CLI wrapper 'safe-reboot' created. Use it manually for pre-reboot tasks."
 }
 
 remove_cpu() {
@@ -105,28 +110,20 @@ remove_safe_reboot() {
     echo "Safe Reboot removed."
 }
 
-# Apply selection
-for i in "${!OPTIONS[@]}"; do
-    num=$((i+1))
-    name="${OPTIONS[i]}"
-
-    if [[ " ${SELECTED[*]} " == *"$num"* ]]; then
-        # Install if not installed
-        if [[ ! " ${INSTALLED[*]} " == *"$name"* ]]; then
-            case "$name" in
-                "CPU Power Saver") install_cpu ;;
-                "Safe Reboot --post") install_safe_reboot ;;
-            esac
-        fi
+# Apply selections
+for name in "CPU Power Saver" "Safe Reboot --post (service only runs POST mode)"; do
+    if [[ " ${SELECTION[*]} " == *"$name"* ]]; then
+        case "$name" in
+            "CPU Power Saver") [[ $CPU_INSTALLED -eq 0 ]] && install_cpu ;;
+            "Safe Reboot --post (service only runs POST mode)") [[ $SAFE_INSTALLED -eq 0 ]] && install_safe_reboot ;;
+        esac
     else
-        # Remove if installed
-        if [[ " ${INSTALLED[*]} " == *"$name"* ]]; then
-            case "$name" in
-                "CPU Power Saver") remove_cpu ;;
-                "Safe Reboot --post") remove_safe_reboot ;;
-            esac
-        fi
+        case "$name" in
+            "CPU Power Saver") [[ $CPU_INSTALLED -eq 1 ]] && remove_cpu ;;
+            "Safe Reboot --post (service only runs POST mode)") [[ $SAFE_INSTALLED -eq 1 ]] && remove_safe_reboot ;;
+        esac
     fi
 done
 
 echo "Deployment complete."
+echo "Use 'safe-reboot --pre' manually to perform pre-reboot tasks and auto-reboot the node."
