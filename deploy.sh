@@ -88,12 +88,17 @@ EOF
     # CLI wrapper for manual PRE/POST execution
     cat > "$SAFE_REBOOT_CLI" <<'EOF'
 #!/bin/bash
-# Always default to PRE mode if no argument given
-ARG="${1:---pre}"
+# Require explicit argument to run
+if [[ "$#" -ne 1 ]]; then
+    echo "Usage: safe-reboot --pre|--post"
+    exit 1
+fi
+
+ARG="$1"
 exec /usr/local/bin/safe_reboot.sh "$ARG"
 EOF
     chmod +x "$SAFE_REBOOT_CLI"
-    echo "CLI wrapper 'safe-reboot' created. Use it manually for pre-reboot tasks."
+    echo "CLI wrapper 'safe-reboot' created. Use it manually for pre/post-reboot tasks."
 }
 
 remove_cpu() {
@@ -127,3 +132,4 @@ done
 
 echo "Deployment complete."
 echo "Use 'safe-reboot --pre' manually to perform pre-reboot tasks and auto-reboot the node."
+echo "The POST-reboot service will automatically run after the node comes back online."
