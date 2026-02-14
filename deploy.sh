@@ -1,60 +1,51 @@
 #!/bin/bash
-set -e
 
-# Available scripts/services
-declare -A SERVICES=(
-    ["CPU Power Saver"]="/usr/local/bin/cpu_power_saver.sh"
-    ["Safe Reboot Post"]="/usr/local/bin/safe-reboot.sh --post"
-)
+# Paths
+CPU_SCRIPT="/usr/local/bin/cpu_power_saver.sh"
+SAFE_REBOOT_SCRIPT="/usr/local/bin/safe_reboot.sh"
+SAFE_REBOOT_CLI="/usr/local/bin/safe-reboot"
 
-# Corresponding systemd service names
-declare -A SERVICE_UNITS=(
-    ["CPU Power Saver"]="cpu_power_saver.service"
-    ["Safe Reboot Post"]="safe-reboot-post.service"
-)
+CPU_SERVICE="/etc/systemd/system/cpu_power_saver.service"
+SAFE_REBOOT_SERVICE="/etc/systemd/system/safe_reboot.service"
 
-# Ensure scripts exist
-mkdir -p /usr/local/bin
-cp scripts/cpu_power_saver.sh /usr/local/bin/
-chmod +x /usr/local/bin/cpu_power_saver.sh
+# Available options
+OPTIONS=("CPU Power Saver" "Safe Reboot --post")
 
-cp scripts/safe-reboot.sh /usr/local/bin/
-chmod +x /usr/local/bin/safe-reboot.sh
+# Detect installed services
+INSTALLED=()
+[[ -f "$CPU_SERVICE" ]] && INSTALLED+=("CPU Power Saver")
+[[ -f "$SAFE_REBOOT_SERVICE" ]] && INSTALLED+=("Safe Reboot --post")
 
-# Build menu items with checked status based on systemctl
-MENU=()
-for name in "${!SERVICES[@]}"; do
-    unit=${SERVICE_UNITS[$name]}
-    if systemctl is-enabled "$unit" &>/dev/null; then
-        MENU+=("$name" "" "on")
+echo "Select services to install (currently installed: ${INSTALLED[*]}):"
+echo "Enter numbers separated by spaces (e.g., 1 2), or leave blank to keep current:"
+
+# Show numbered list
+for i in "${!OPTIONS[@]}"; do
+    num=$((i+1))
+    name="${OPTIONS[i]}"
+    if [[ " ${INSTALLED[*]} " == *"$name"* ]]; then
+        echo "$num) [x] $name"
     else
-        MENU+=("$name" "" "off")
+        echo "$num) [ ] $name"
     fi
 done
 
-# Use whiptail for checkbox menu (if not installed, install or use dialog)
-CHOICES=$(whiptail --title "Select Services to Deploy" \
-    --checklist "Use SPACE to toggle, ENTER to apply" 15 60 6 \
-    "${MENU[@]}" 3>&1 1>&2 2>&3)
+read -rp "Selection: " selection
 
-# Convert choices into array
-read -r -a SELECTED <<< "$CHOICES"
+# Parse selection into array of numbers
+read -ra SELECTED <<< "$selection"
 
-# Apply changes
-for name in "${!SERVICES[@]}"; do
-    unit=${SERVICE_UNITS[$name]}
-    script=${SERVICES[$name]}
+# Functions
+install_cpu() {
+    cp scripts/cpu_power_saver.sh "$CPU_SCRIPT"
+    chmod +x "$CPU_SCRIPT"
 
-    if [[ " ${SELECTED[*]} " =~ " $name " ]]; then
-        # Install/start if not enabled
-        if ! systemctl is-enabled "$unit" &>/dev/null; then
-            echo "Installing and starting $unit..."
-            echo "[Unit]
-Description=$name
+    echo "[Unit]
+Description=CPU Power Saver Service
 After=network.target
 
 [Service]
-ExecStart=$script
+ExecStart=$CPU_SCRIPT
 Restart=always
 User=root
 Group=root
@@ -62,22 +53,78 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 Environment=HOME=/root
 
 [Install]
-WantedBy=multi-user.target" > "/etc/systemd/system/$unit"
+WantedBy=multi-user.target" > "$CPU_SERVICE"
 
-            systemctl daemon-reload
-            systemctl enable "$unit"
-            systemctl start "$unit"
-        else
-            echo "$unit already installed and running."
+    systemctl daemon-reload
+    systemctl enable --now cpu_power_saver.service
+    echo "CPU Power Saver installed and started."
+}
+
+install_safe_reboot() {
+    cp scripts/safe_reboot.sh "$SAFE_REBOOT_SCRIPT"
+    chmod +x "$SAFE_REBOOT_SCRIPT"
+
+    echo "[Unit]
+Description=Safe Reboot Post-Reboot Service
+After=network.target
+
+[Service]
+ExecStart=$SAFE_REBOOT_SCRIPT --post
+Restart=no
+User=root
+Group=root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+Environment=HOME=/root
+
+[Install]
+WantedBy=multi-user.target" > "$SAFE_REBOOT_SERVICE"
+
+    systemctl daemon-reload
+    systemctl enable --now safe_reboot.service
+    echo "Safe Reboot --post service installed and enabled."
+
+    # CLI wrapper
+    echo "#!/bin/bash
+ARG=\"\${1:---pre}\"
+$SAFE_REBOOT_SCRIPT \"\$ARG\"" > "$SAFE_REBOOT_CLI"
+    chmod +x "$SAFE_REBOOT_CLI"
+    echo "CLI wrapper 'safe-reboot' created."
+}
+
+remove_cpu() {
+    systemctl stop cpu_power_saver.service 2>/dev/null || true
+    systemctl disable cpu_power_saver.service 2>/dev/null || true
+    rm -f "$CPU_SERVICE" "$CPU_SCRIPT"
+    echo "CPU Power Saver removed."
+}
+
+remove_safe_reboot() {
+    systemctl stop safe_reboot.service 2>/dev/null || true
+    systemctl disable safe_reboot.service 2>/dev/null || true
+    rm -f "$SAFE_REBOOT_SERVICE" "$SAFE_REBOOT_SCRIPT" "$SAFE_REBOOT_CLI"
+    echo "Safe Reboot removed."
+}
+
+# Apply selection
+for i in "${!OPTIONS[@]}"; do
+    num=$((i+1))
+    name="${OPTIONS[i]}"
+
+    if [[ " ${SELECTED[*]} " == *"$num"* ]]; then
+        # Install if not installed
+        if [[ ! " ${INSTALLED[*]} " == *"$name"* ]]; then
+            case "$name" in
+                "CPU Power Saver") install_cpu ;;
+                "Safe Reboot --post") install_safe_reboot ;;
+            esac
         fi
     else
-        # Stop/remove if currently enabled
-        if systemctl is-enabled "$unit" &>/dev/null; then
-            echo "Stopping and disabling $unit..."
-            systemctl stop "$unit"
-            systemctl disable "$unit"
-            rm -f "/etc/systemd/system/$unit"
-            systemctl daemon-reload
+        # Remove if installed
+        if [[ " ${INSTALLED[*]} " == *"$name"* ]]; then
+            case "$name" in
+                "CPU Power Saver") remove_cpu ;;
+                "Safe Reboot --post") remove_safe_reboot ;;
+            esac
         fi
     fi
 done
