@@ -89,7 +89,13 @@ pre_reboot() {
 post_reboot() {
     [[ -f "$MARKER" ]] || { echo "Reboot marker not found, skipping post-reboot tasks."; exit 0; }
 
-    echo "Post-reboot: removing Ceph maintenance flags..."
+    echo "Post-reboot: waiting for Ceph to be up..."
+    until ceph -s &>/dev/null; do
+        echo "Waiting for cluster..."
+        sleep 5
+    done
+
+    echo "Removing Ceph maintenance flags (noout + norebalance)..."
     ceph osd unset noout
     ceph osd unset norebalance
 
