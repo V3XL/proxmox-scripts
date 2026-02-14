@@ -7,54 +7,6 @@ MARKER="/var/lib/ceph/reboot-pending"
 ### Common functions
 ### ------------------------------
 
-mark_osds_out_for_node(){
-    local NODE="$1"
-    local OSDS
-    OSDS=$(ceph osd tree -f json | jq -r --arg host "$NODE" '
-      .nodes[] | select(.type=="host" and .name==$host) | .children[]
-    ' | xargs)
-    echo "OSDs on $NODE: $OSDS"
-    for osd in $OSDS; do
-        echo "Marking OSD $osd out"
-        ceph osd out $osd
-    done
-}
-
-check_osds_out() {
-    local NODE="$1"
-    local ALL_OUT=0
-    local OSDS
-    OSDS=$(ceph osd tree -f json | jq -r --arg host "$NODE" '
-      .nodes[] | select(.type=="host" and .name==$host) | .children[]
-    ' | xargs)
-    for osd in $OSDS; do
-        REWEIGHT=$(ceph osd tree -f json | jq -r --argjson id "$osd" '.nodes[] | select(.id==$id) | .reweight')
-        if [[ "$REWEIGHT" != "0" ]]; then
-            echo "OSD $osd is not fully out (reweight: $REWEIGHT)"
-            ALL_OUT=1
-        fi
-    done
-    ((ALL_OUT==0))
-}
-
-wait_for_osds_out() {
-    local NODE="$1"
-    local TIMEOUT="${2:-60}"
-    local INTERVAL=5
-    local elapsed=0
-    while (( elapsed < TIMEOUT )); do
-        if check_osds_out "$NODE"; then
-            echo "All OSDs confirmed out for $NODE."
-            return 0
-        fi
-        echo "Waiting for OSDs to be out..."
-        sleep $INTERVAL
-        (( elapsed += INTERVAL ))
-    done
-    echo "Timeout reached: some OSDs still not out!"
-    return 1
-}
-
 stop_local_services(){
     systemctl stop pve-cluster
     systemctl stop ceph.target
@@ -118,10 +70,6 @@ pre_reboot() {
     else
         echo "No guests remaining on $NODE."
     fi
-
-    echo "Marking OSDs as out for node $NODE..."
-    mark_osds_out_for_node "$NODE"
-    wait_for_osds_out "$NODE" || { echo "ERROR: OSDs not fully out, aborting."; exit 1; }
 
     echo "Stopping local services..."
     stop_local_services
