@@ -6,7 +6,6 @@ MARKER="/var/lib/ceph/reboot-pending"
 ### ------------------------------
 ### Common functions
 ### ------------------------------
-
 stop_local_services(){
     systemctl stop pve-cluster
     systemctl stop ceph.target
@@ -79,7 +78,9 @@ pre_reboot() {
     mkdir -p "$(dirname $MARKER)"
     touch "$MARKER"
 
-    echo "Pre-reboot tasks complete. You may now reboot the node safely."
+    echo "Pre-reboot tasks complete. Rebooting node now..."
+    sleep 2
+    reboot
 }
 
 ### ------------------------------
@@ -101,15 +102,8 @@ post_reboot() {
 ### ------------------------------
 ### Main
 ### ------------------------------
-case "$1" in
-    --pre)
-        pre_reboot
-        ;;
-    --post)
-        post_reboot
-        ;;
-    *)
-        echo "Usage: $0 --pre|--post"
-        exit 1
-        ;;
-esac
+if [[ -f "$MARKER" ]]; then
+    post_reboot
+else
+    pre_reboot
+fi
