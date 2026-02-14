@@ -1,7 +1,24 @@
 #!/bin/bash
+set -e
 
 NODE=$(hostname)
 MARKER="/var/lib/ceph/reboot-pending"
+
+### ------------------------------
+### Ensure jq is installed
+### ------------------------------
+if ! command -v jq &>/dev/null; then
+    echo "jq not found, installing..."
+    if command -v apt &>/dev/null; then
+        apt update && apt install -y jq
+    elif command -v yum &>/dev/null; then
+        yum install -y jq
+    else
+        echo "Package manager not found. Install jq manually." >&2
+        exit 1
+    fi
+    echo "jq installed."
+fi
 
 ### ------------------------------
 ### Common functions
