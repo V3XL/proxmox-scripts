@@ -53,26 +53,22 @@ migrate_all_guests() {
     local NODE="$1"
     echo "Migrating guests from $NODE with dynamic load balancing..."
 
-    # LXC containers
-    pvesh get /nodes/$NODE/lxc -o json | jq -r '.[] | select(.mp0 == null) | .vmid' | while read CTID; do
+    # LXC containers - offline migration
+    pvesh get /nodes/$NODE/lxc -o json | jq -r '.[].vmid' | while read CTID; do
         TARGET=$(pvesh get /nodes -o json | jq -r --arg node "$NODE" '
-            .[] | select(.node != $node) 
-            | select(.maxmem != null and .mem != null) 
-            | "\(.node) \(.maxmem - .mem)"' \
-            | sort -k2 -nr | tail -n1 | awk '{print $1}')
-        [[ -z "$TARGET" ]] && echo "No valid target for CT $CTID, skipping." && continue
-        echo "Migrating CT $CTID -> $TARGET"
-        pct migrate "$CTID" "$TARGET" --online || echo "Failed to migrate CT $CTID"
+            .[] | select(.node != $node)
+            | "\(.node)"' | head -n1)
+        [[ -z "$TARGET" ]] && echo "No target for CT $CTID, skipping." && continue
+        echo "Migrating CT $CTID -> $TARGET (offline)"
+        pct migrate "$CTID" "$TARGET" || echo "Failed to migrate CT $CTID"
     done
 
-    # QEMU VMs
+    # QEMU VMs - attempt live migration if possible
     pvesh get /nodes/$NODE/qemu -o json | jq -r '.[].vmid' | while read VMID; do
         TARGET=$(pvesh get /nodes -o json | jq -r --arg node "$NODE" '
-            .[] | select(.node != $node) 
-            | select(.maxmem != null and .mem != null) 
-            | "\(.node) \(.maxmem - .mem)"' \
-            | sort -k2 -nr | tail -n1 | awk '{print $1}')
-        [[ -z "$TARGET" ]] && echo "No valid target for VM $VMID, skipping." && continue
+            .[] | select(.node != $node and .mem != null and .maxmem != null)
+            | "\(.node) \(.maxmem - .mem)"' | sort -k2 -nr | tail -n1 | awk '{print $1}')
+        [[ -z "$TARGET" ]] && echo "No target for VM $VMID, skipping." && continue
         echo "Migrating VM $VMID -> $TARGET"
         qm migrate "$VMID" "$TARGET" --online || echo "VM $VMID offline or failed, skipping"
     done
